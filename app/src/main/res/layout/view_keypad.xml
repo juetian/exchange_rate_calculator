@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 计算器键盘：5 行 × 4 列 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@color/keypad_bg"
+    android:orientation="vertical"
+    android:padding="6dp">
+
+    <LinearLayout style="@style/KeyRow">
+        <Button android:id="@+id/keyClear" style="@style/Key.Func" android:text="C" />
+        <Button android:id="@+id/keyBack" style="@style/Key.Func" android:text="⌫" />
+        <Button android:id="@+id/keyPercent" style="@style/Key.Op" android:text="%" />
+        <Button android:id="@+id/keyDivide" style="@style/Key.Op" android:text="÷" />
+    </LinearLayout>
+
+    <LinearLayout style="@style/KeyRow">
+        <Button android:id="@+id/key7" style="@style/Key" android:text="7" />
+        <Button android:id="@+id/key8" style="@style/Key" android:text="8" />
+        <Button android:id="@+id/key9" style="@style/Key" android:text="9" />
+        <Button android:id="@+id/keyTimes" style="@style/Key.Op" android:text="×" />
+    </LinearLayout>
+
+    <LinearLayout style="@style/KeyRow">
+        <Button android:id="@+id/key4" style="@style/Key" android:text="4" />
+        <Button android:id="@+id/key5" style="@style/Key" android:text="5" />
+        <Button android:id="@+id/key6" style="@style/Key" android:text="6" />
+        <Button android:id="@+id/keyMinus" style="@style/Key.Op" android:text="−" />
+    </LinearLayout>
+
+    <LinearLayout style="@style/KeyRow">
+        <Button android:id="@+id/key1" style="@style/Key" android:text="1" />
+        <Button android:id="@+id/key2" style="@style/Key" android:text="2" />
+        <Button android:id="@+id/key3" style="@style/Key" android:text="3" />
+        <Button android:id="@+id/keyPlus" style="@style/Key.Op" android:text="+" />
+    </LinearLayout>
+
+    <LinearLayout style="@style/KeyRow">
+        <Button android:id="@+id/key00" style="@style/Key" android:text="00" />
+        <Button android:id="@+id/key0" style="@style/Key" android:text="0" />
+        <Button android:id="@+id/keyDot" style="@style/Key" android:text="." />
+        <Button android:id="@+id/keyEquals" style="@style/Key.Equals" android:text="=" />
+    </LinearLayout>
+</LinearLayout>

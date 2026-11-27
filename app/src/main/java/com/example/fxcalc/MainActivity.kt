@@ -1,18 +1,27 @@
 package com.example.fxcalc
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.os.Bundle
 import android.text.Editable
 import android.text.TextWatcher
+import android.view.HapticFeedbackConstants
 import android.view.LayoutInflater
+import android.view.View
 import android.view.inputmethod.InputMethodManager
 import android.widget.ArrayAdapter
 import android.widget.EditText
 import android.widget.ListView
-import android.widget.TextView
 import android.widget.Toast
+import androidx.annotation.VisibleForTesting
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import com.example.fxcalc.Calculator.DIVIDE
+import com.example.fxcalc.Calculator.MINUS
+import com.example.fxcalc.Calculator.OPERATORS
+import com.example.fxcalc.Calculator.PLUS
+import com.example.fxcalc.Calculator.TIMES
 import com.example.fxcalc.databinding.ActivityMainBinding
 import com.example.fxcalc.databinding.ItemCurrencyRowBinding
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
@@ -23,25 +32,25 @@ import java.text.DecimalFormat
 import java.text.DecimalFormatSymbols
 import java.util.Date
 import java.util.Locale
-import kotlin.math.abs
 import kotlin.concurrent.thread
+import kotlin.math.abs
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
     private lateinit var repo: RateRepository
 
-    private val rows = mutableListOf<Row>()
+    private val rows = mutableListOf<ItemCurrencyRowBinding>()
     private val selected = mutableListOf<String>()
 
-    /** 当前作为输入源的行及其金额 */
+    /** 当前作为输入源的行 */
     private var sourceIndex = 0
-    private var sourceAmount = 100.0
 
-    /** 程序内部改写文本时置为 true，避免 TextWatcher 互相触发 */
-    private var updating = false
+    /** 输入源行中的算式，如 "100×3+20" */
+    private var expr = "100"
 
-    private inner class Row(val index: Int, val b: ItemCurrencyRowBinding)
+    /** 为 true 时，下一次输入数字会替换当前内容（按 = 之后、或刚切换输入行时） */
+    private var replaceOnDigit = true
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -49,113 +58,202 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
 
         repo = RateRepository(this)
-        loadSelection()
+        loadState()
 
         val inflater = LayoutInflater.from(this)
         for (i in 0 until ROW_COUNT) {
             val rb = ItemCurrencyRowBinding.inflate(inflater, binding.rowsContainer, false)
             // 插到提示文字之前
             binding.rowsContainer.addView(rb.root, binding.rowsContainer.childCount - 1)
-            val row = Row(i, rb)
-            rows += row
-            setupRow(row)
+            rows += rb
+            rb.currencyPicker.setOnClickListener { showPicker(i) }
+            rb.card.setOnClickListener { selectSource(i) }
+            rb.card.setOnLongClickListener { copyRow(i); true }
         }
 
+        setupKeypad()
         binding.btnRefresh.setOnClickListener { refreshRates(showToast = true) }
-        binding.btnClear.setOnClickListener {
-            sourceAmount = 0.0
-            updating = true
-            rows.forEach { it.b.etAmount.setText("") }
-            updating = false
-            rows[sourceIndex].b.etAmount.requestFocus()
-        }
 
-        renderAll()
+        render()
         updateStatus()
-        refreshRates(showToast = false)
+        if (autoRefreshOnStart) refreshRates(showToast = false)
     }
 
-    private fun setupRow(row: Row) {
-        val b = row.b
-        b.currencyPicker.setOnClickListener { showPicker(row.index) }
-        b.etAmount.setOnFocusChangeListener { _, hasFocus ->
-            if (hasFocus) {
-                sourceIndex = row.index
-                sourceAmount = parse(b.etAmount.text.toString())
-                highlightSource()
-            }
+    // ---------------- 键盘 ----------------
+
+    private fun setupKeypad() {
+        val k = binding.keypad
+        val digits = mapOf(
+            k.key0 to "0", k.key1 to "1", k.key2 to "2", k.key3 to "3", k.key4 to "4",
+            k.key5 to "5", k.key6 to "6", k.key7 to "7", k.key8 to "8", k.key9 to "9",
+            k.key00 to "00",
+        )
+        digits.forEach { (btn, d) -> btn.setOnClickListener { onKey(it) { inputDigits(d) } } }
+        k.keyDot.setOnClickListener { onKey(it) { inputDot() } }
+        k.keyPlus.setOnClickListener { onKey(it) { inputOperator(PLUS) } }
+        k.keyMinus.setOnClickListener { onKey(it) { inputOperator(MINUS) } }
+        k.keyTimes.setOnClickListener { onKey(it) { inputOperator(TIMES) } }
+        k.keyDivide.setOnClickListener { onKey(it) { inputOperator(DIVIDE) } }
+        k.keyPercent.setOnClickListener { onKey(it) { inputPercent() } }
+        k.keyBack.setOnClickListener { onKey(it) { backspace() } }
+        k.keyBack.setOnLongClickListener { onKey(it) { clear() }; true }
+        k.keyClear.setOnClickListener { onKey(it) { clear() } }
+        k.keyEquals.setOnClickListener { onKey(it) { equals() } }
+    }
+
+    private inline fun onKey(v: View, action: () -> Unit) {
+        v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+        action()
+        render()
+    }
+
+    /** 当前正在输入的数字（最后一个运算符之后的部分） */
+    private fun currentToken(): String {
+        val i = expr.indexOfLast { it in OPERATORS }
+        return expr.substring(i + 1)
+    }
+
+    private fun inputDigits(d: String) {
+        if (replaceOnDigit) {
+            expr = ""
+            replaceOnDigit = false
         }
-        b.etAmount.addTextChangedListener(object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, a: Int) {}
-            override fun onTextChanged(s: CharSequence?, st: Int, b: Int, c: Int) {}
-            override fun afterTextChanged(s: Editable?) {
-                if (updating) return
-                sourceIndex = row.index
-                sourceAmount = parse(s?.toString().orEmpty())
-                renderOthers()
-                highlightSource()
-            }
-        })
-    }
-
-    private fun parse(text: String): Double =
-        text.replace(",", "").trim().toDoubleOrNull() ?: 0.0
-
-    /** 刷新所有行（含输入源本身的显示） */
-    private fun renderAll() {
-        updating = true
-        rows.forEach { row ->
-            val c = Currencies.get(selected[row.index])
-            row.b.tvFlag.text = c.flag
-            row.b.tvCode.text = c.code
-            row.b.tvName.text = c.name
-            if (row.index == sourceIndex) {
-                val et = row.b.etAmount
-                if (parse(et.text.toString()) != sourceAmount || et.text.isEmpty()) {
-                    et.setText(if (sourceAmount == 0.0) "" else plain(sourceAmount))
-                }
-            }
+        if (expr.endsWith("%")) return
+        val token = currentToken()
+        if (token.count { it.isDigit() } >= MAX_DIGITS || expr.length >= MAX_LENGTH) return
+        when {
+            token.isEmpty() && d == "00" -> expr += "0"
+            token == "0" && d == "00" -> Unit
+            token == "0" -> expr = expr.dropLast(1) + d
+            else -> expr += d
         }
-        updating = false
-        renderOthers()
-        highlightSource()
     }
 
-    /** 根据输入源换算其他四行 */
-    private fun renderOthers() {
-        updating = true
+    private fun inputDot() {
+        if (replaceOnDigit) {
+            expr = ""
+            replaceOnDigit = false
+        }
+        if (expr.endsWith("%")) return
+        val token = currentToken()
+        when {
+            token.contains('.') -> Unit
+            token.isEmpty() -> expr += "0."
+            else -> expr += "."
+        }
+    }
+
+    private fun inputOperator(op: Char) {
+        replaceOnDigit = false
+        if (expr.length >= MAX_LENGTH) return
+        val last = expr.lastOrNull()
+        when {
+            last == null -> if (op == MINUS) expr = MINUS.toString()
+            last in OPERATORS -> {
+                expr = expr.dropLast(1)
+                // 只剩一个负号时，换成其他运算符没有意义
+                expr = if (expr.isEmpty()) (if (op == MINUS) MINUS.toString() else "") else expr + op
+            }
+            last == '.' -> expr = expr.dropLast(1) + op
+            else -> expr += op
+        }
+    }
+
+    private fun inputPercent() {
+        replaceOnDigit = false
+        val last = expr.lastOrNull() ?: return
+        if (last.isDigit() || last == '%') expr += "%"
+    }
+
+    private fun backspace() {
+        replaceOnDigit = false
+        expr = expr.dropLast(1)
+    }
+
+    private fun clear() {
+        replaceOnDigit = false
+        expr = ""
+    }
+
+    private fun equals() {
+        val result = Calculator.evaluate(expr)
+        if (result == null) {
+            Toast.makeText(this, R.string.calc_error, Toast.LENGTH_SHORT).show()
+            return
+        }
+        expr = if (result.signum() == 0) "" else plain(result)
+        replaceOnDigit = true
+    }
+
+    // ---------------- 行操作 ----------------
+
+    /** 点击某一行：把它设为输入源，以它当前显示的金额为起点继续计算 */
+    private fun selectSource(index: Int) {
+        if (index == sourceIndex) return
+        val shown = rows[index].tvAmount.text.toString().replace(",", "")
+        expr = shown
+        sourceIndex = index
+        replaceOnDigit = true
+        rows[index].card.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+        render()
+    }
+
+    private fun copyRow(index: Int) {
+        val text = if (index == sourceIndex) {
+            Calculator.evaluate(expr)?.let { plain(it) } ?: return
+        } else {
+            rows[index].tvAmount.text.toString().replace(",", "")
+        }
+        if (text.isEmpty()) return
+        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        cm.setPrimaryClip(ClipData.newPlainText(selected[index], text))
+        Toast.makeText(this, getString(R.string.copied, "$text ${selected[index]}"), Toast.LENGTH_SHORT).show()
+    }
+
+    // ---------------- 显示 ----------------
+
+    private fun render() {
+        val result = Calculator.evaluate(expr)
+        val value = result?.toDouble() ?: 0.0
         val from = selected[sourceIndex]
-        rows.forEach { row ->
-            if (row.index == sourceIndex) return@forEach
-            val to = selected[row.index]
-            val et = row.b.etAmount
-            if (sourceAmount == 0.0) {
-                et.setText("")
-            } else {
-                et.setText(format(repo.convert(sourceAmount, from, to)))
-            }
-        }
-        updating = false
-        // 显示每一行的 1 单位兑换关系
-        rows.forEach { row ->
-            val code = selected[row.index]
+        val active = ContextCompat.getColor(this, R.color.active_stroke)
+
+        rows.forEachIndexed { i, row ->
+            val code = selected[i]
             val c = Currencies.get(code)
-            if (row.index == sourceIndex) {
-                row.b.tvName.text = c.name
+            row.tvFlag.text = c.flag
+            row.tvCode.text = c.code
+            row.card.strokeColor = if (i == sourceIndex) active else 0
+
+            if (i == sourceIndex) {
+                row.tvName.text = c.name
+                row.tvAmount.text = prettyExpr(expr)
+                if (Calculator.hasOperator(expr)) {
+                    row.tvSub.visibility = View.VISIBLE
+                    row.tvSub.text = if (result == null) getString(R.string.calc_error)
+                    else "= ${format(value)}"
+                } else {
+                    row.tvSub.visibility = View.GONE
+                }
             } else {
-                val unit = repo.convert(1.0, from, code)
-                row.b.tvName.text = "${c.name} · 1 $from = ${format(unit)}"
+                row.tvName.text = "${c.name} · 1 $from = ${format(repo.convert(1.0, from, code))}"
+                row.tvAmount.text = if (result == null || value == 0.0) "" else
+                    format(repo.convert(value, from, code))
+                row.tvSub.visibility = View.GONE
             }
         }
     }
 
-    private fun highlightSource() {
-        val active = ContextCompat.getColor(this, R.color.active_stroke)
-        val normal = 0x00000000
-        rows.forEach { row ->
-            row.b.card.strokeColor = if (row.index == sourceIndex) active else normal
+    /** 给算式中的每个数字加上千分位，如 "1234.5×3" → "1,234.5×3" */
+    private fun prettyExpr(s: String): String =
+        NUMBER.replace(s) { m ->
+            val t = m.value
+            val dot = t.indexOf('.')
+            val intPart = if (dot >= 0) t.substring(0, dot) else t
+            val grouped = if (intPart.isEmpty()) "" else
+                DecimalFormat("#,##0", US).format(BigDecimal(intPart))
+            if (dot >= 0) grouped + t.substring(dot) else grouped
         }
-    }
 
     /** 显示用格式：带千分位，小数位数随数值大小调整 */
     private fun format(v: Double): String {
@@ -166,12 +264,15 @@ class MainActivity : AppCompatActivity() {
             a >= 0.01 -> "#,##0.####"
             else -> "#,##0.######"
         }
-        return DecimalFormat(pattern, DecimalFormatSymbols(Locale.US)).format(v)
+        return DecimalFormat(pattern, US).format(v)
     }
 
-    /** 输入框中保留的纯数字格式 */
-    private fun plain(v: Double): String =
-        BigDecimal(v).setScale(4, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString()
+    /** 算式中使用的纯数字格式，负数用 − 号 */
+    private fun plain(v: BigDecimal): String =
+        v.setScale(8, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString()
+            .replace('-', MINUS)
+
+    // ---------------- 货币选择 ----------------
 
     private fun showPicker(rowIndex: Int) {
         val view = layoutInflater.inflate(R.layout.dialog_currency_picker, null)
@@ -211,17 +312,19 @@ class MainActivity : AppCompatActivity() {
             }
             selected[rowIndex] = code
             saveSelection()
-            renderAll()
+            render()
             hideKeyboard(search)
             dialog.dismiss()
         }
         dialog.show()
     }
 
-    private fun hideKeyboard(v: android.view.View) {
+    private fun hideKeyboard(v: View) {
         val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
         imm.hideSoftInputFromWindow(v.windowToken, 0)
     }
+
+    // ---------------- 汇率 ----------------
 
     private fun refreshRates(showToast: Boolean) {
         binding.tvStatus.setText(R.string.status_loading)
@@ -232,7 +335,7 @@ class MainActivity : AppCompatActivity() {
                 if (isFinishing || isDestroyed) return@runOnUiThread
                 binding.btnRefresh.isEnabled = true
                 updateStatus()
-                if (ok) renderOthers()
+                if (ok) render()
                 if (showToast) {
                     Toast.makeText(
                         this,
@@ -245,24 +348,26 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateStatus() {
-        val tv: TextView = binding.tvStatus
         if (repo.updatedAt == 0L) {
-            tv.setText(R.string.status_builtin)
+            binding.tvStatus.setText(R.string.status_builtin)
         } else {
             val time = DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT)
                 .format(Date(repo.updatedAt))
-            tv.text = getString(R.string.status_updated, time)
+            binding.tvStatus.text = getString(R.string.status_updated, time)
         }
     }
 
-    private fun loadSelection() {
+    // ---------------- 保存状态 ----------------
+
+    private fun loadState() {
         val prefs = getSharedPreferences("ui", MODE_PRIVATE)
         val saved = prefs.getString("selected", null)?.split(",")
             ?.filter { code -> Currencies.ALL.any { it.code == code } }
         selected.clear()
         selected += if (saved != null && saved.size == ROW_COUNT) saved else Currencies.DEFAULT_SELECTION
-        sourceAmount = prefs.getFloat("amount", 100f).toDouble()
+        expr = prefs.getString("expr", "100") ?: "100"
         sourceIndex = prefs.getInt("source", 0).coerceIn(0, ROW_COUNT - 1)
+        replaceOnDigit = true
     }
 
     private fun saveSelection() {
@@ -274,12 +379,20 @@ class MainActivity : AppCompatActivity() {
     override fun onPause() {
         super.onPause()
         getSharedPreferences("ui", MODE_PRIVATE).edit()
-            .putFloat("amount", sourceAmount.toFloat())
+            .putString("expr", expr)
             .putInt("source", sourceIndex)
             .apply()
     }
 
     companion object {
+        /** 测试时关闭启动联网，保证结果可重复 */
+        @VisibleForTesting
+        var autoRefreshOnStart = true
+
         private const val ROW_COUNT = 5
+        private const val MAX_DIGITS = 15
+        private const val MAX_LENGTH = 40
+        private val US = DecimalFormatSymbols(Locale.US)
+        private val NUMBER = Regex("""\d*\.?\d+|\d+\.""")
     }
 }

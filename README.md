@@ -5,6 +5,11 @@
 ## 功能
 
 - 5 行货币同时显示：在任意一行输入金额，其余四行实时换算
+- 内置计算器键盘（+ − × ÷ %，先乘除后加减）：可直接输入算式，如 `100×3+20`，
+  算式结果实时换算成其他货币；按 `=` 把结果固定下来继续算
+- 点击任意一行（包括换算出来的结果行）即可把它作为输入，在该金额基础上继续计算，
+  例如先看 100 人民币是多少美元，再点美元行按 `×3`
+- 长按金额可复制；长按 ⌫ 清空
 - 点击货币（国旗/代码）可更换，支持按代码或中文名搜索；选中已存在的货币时两行自动交换
 - 每行显示 `1 源货币 = x 本货币` 的单位汇率
 - 启动时自动从 [open.er-api.com](https://open.er-api.com)（免费、无需 API Key）获取最新汇率，并缓存到本地
@@ -26,6 +31,8 @@
 - 用 Android Studio 直接打开本项目运行；或
 - 命令行：`./gradlew assembleRelease`，APK 位于 `app/build/outputs/apk/release/app-release.apk`
 - 也可在 GitHub 的 Actions 页面下载自动构建的 APK
+
+- 运行测试：`./gradlew testReleaseUnitTest`（含计算器单元测试和 Robolectric 界面测试）
 
 要求：JDK 17+，Android SDK 35。最低支持 Android 7.0（API 24）。
 

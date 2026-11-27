@@ -5,4 +5,9 @@
     <color name="text_primary">#E8EAED</color>
     <color name="text_secondary">#9AA4B0</color>
     <color name="active_stroke">#8AB4F8</color>
+    <color name="keypad_bg">#0C0E10</color>
+    <color name="key_bg">#24292F</color>
+    <color name="key_func_bg">#343A42</color>
+    <color name="key_op_bg">#26374F</color>
+    <color name="key_equals_text">#0C1A2E</color>
 </resources>
